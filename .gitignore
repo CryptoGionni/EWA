@@ -3,3 +3,9 @@ __pycache__/
 *.pyc
 .pytest_cache/
 screenshots/
+
+# Build / installer (le icone Microsoft si estraggono dal Windows dell'utente, non vanno committate)
+ewa/assets/icons/
+build/
+dist/
+*.spec.bak

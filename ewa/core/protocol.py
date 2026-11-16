@@ -12,6 +12,12 @@ Hub -> tool  (oggi solo il Blocco note in modalità Dark)
     {"v":1,"kind":"chat.end"}
     {"v":1,"kind":"chat.error","msg":"descrizione"}
 
+Shell EWA (si presenta con hello tool="shell": riceve il log, non manda eventi)
+    shell -> hub  {"v":1,"kind":"control","cmd":"status"|"toast"|"log"|"shutdown", ...}
+                  toast: "text";  log: "on": bool;  shutdown: "only_if_idle": bool
+    hub -> shell  {"v":1,"kind":"log","level":"event|marv|chat|info|error","text":"..."}
+                  {"v":1,"kind":"status","data":{...}}   (risposta a cmd=status)
+
 Il catalogo EVENTS documenta tipi e campi di `data`. I tool NON devono emettere
 tipi fuori catalogo; l'hub ignora (ma registra) eventi sconosciuti.
 """
@@ -125,3 +131,14 @@ def chat_end() -> bytes:
 
 def chat_error(msg: str) -> bytes:
     return encode({"kind": "chat.error", "msg": msg})
+
+
+SHELL = "shell"  # nome con cui la shell EWA si presenta all'hub
+
+
+def log(level: str, text: str) -> bytes:
+    return encode({"kind": "log", "level": level, "text": text})
+
+
+def status(data: dict[str, Any]) -> bytes:
+    return encode({"kind": "status", "data": data})

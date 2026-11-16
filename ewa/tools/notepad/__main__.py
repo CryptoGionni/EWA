@@ -10,5 +10,9 @@ def build(client):
     return NotepadWindow(client, path=args[0] if args else None)
 
 
+def main() -> int:
+    return run_tool("notepad", build)
+
+
 if __name__ == "__main__":
-    sys.exit(run_tool("notepad", build))
+    sys.exit(main())

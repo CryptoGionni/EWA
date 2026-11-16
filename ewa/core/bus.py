@@ -60,16 +60,19 @@ class Connection:
 
 EventCallback = Callable[[Connection, protocol.Event], Awaitable[None]]
 ConnCallback = Callable[[Connection], Awaitable[None] | None]
+ControlCallback = Callable[[Connection, dict], Awaitable[None] | None]
 
 
 class HubServer:
     def __init__(self, on_event: EventCallback, host: str = "127.0.0.1", port: int = 47474,
-                 on_connect: ConnCallback | None = None, on_disconnect: ConnCallback | None = None):
+                 on_connect: ConnCallback | None = None, on_disconnect: ConnCallback | None = None,
+                 on_control: ControlCallback | None = None):
         self.host = host
         self.port = port
         self.on_event = on_event
         self.on_connect = on_connect
         self.on_disconnect = on_disconnect
+        self.on_control = on_control
         self.connections: dict[int, Connection] = {}
         self._server: asyncio.AbstractServer | None = None
 
@@ -79,8 +82,8 @@ class HubServer:
         except OSError as e:
             raise HubPortInUse(
                 f"Impossibile usare {self.host}:{self.port} ({e.strerror or e}). "
-                "Probabilmente c'è già un'altra shell EWA aperta: chiudila, "
-                "oppure cambia EWA_HUB_PORT nel file .env."
+                "Probabilmente MarvHub è già attivo, "
+                "oppure un altro programma usa la porta: cambia EWA_HUB_PORT nel file .env."
             ) from e
 
     async def stop(self) -> None:
@@ -132,6 +135,8 @@ class HubServer:
                     conn.tool = str(msg.get("tool") or "?")
                     conn.pid = msg.get("pid")
                     await self._call(self.on_connect, conn)
+                elif kind == "control":
+                    await self._call(self.on_control, conn, msg)
                 elif kind == "event":
                     if conn.tool is None:  # evento senza hello: deduci il tool
                         conn.tool = str(msg.get("tool") or "?")

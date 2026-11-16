@@ -43,7 +43,7 @@ NOTIFY_RULES = (
 CHAT_RULES = (
     "\n\nSei nella chat del Blocco note (modalità Dark): parli con l'utente che sta scrivendo in una nota. "
     "Regole:\n"
-    "- Risposte brevi: da una a tre frasi.\n"
+    "- Dai comunque la risposta corretta, ma in modo breve: una o due frasi al massimo.\n"
     "- Solo testo semplice: niente markdown, elenchi, grassetti, emoji o virgolette decorative "
     "(la conversazione finisce in un file .txt).\n"
     "- Resta nel personaggio: scocciato, ironico, cinico, riluttante, ma rispondi davvero a ciò che ti chiede.\n"
@@ -89,7 +89,8 @@ def describe_event(ev: Event) -> str:
     if t == "calc.open":
         return "ha aperto la Calcolatrice"
     if t == "calc.result":
-        return f"ha calcolato {g('expr', '?')} = {g('result', '?')} (modalità {g('mode', 'standard')})"
+        expr = str(g("expr", "?")).rstrip().rstrip("=").rstrip()
+        return f"ha calcolato {expr} = {g('result', '?')} (modalità {g('mode', 'standard')})"
     if t == "calc.error":
         return f"ha provato un calcolo non valido: {g('expr', '?')} ({g('error', 'errore')})"
     if t == "calc.mode":
@@ -218,6 +219,13 @@ def build_chat_messages(history: Iterable[dict], recent_events: Sequence[Event],
     system = (SYSTEM_PROMPT + CHAT_RULES + "\n\nAttività recenti dell'utente nei tool:\n"
               + format_memory(recent_events, now))
     return [{"role": "system", "content": system}] + FEW_SHOT_CHAT + list(history)
+
+
+def warmup_messages() -> list[dict]:
+    """Richiesta fittizia per scaldare il modello: stesso prefisso (system + few-shot)
+    delle notifiche, così Ollama ha già in cache la parte fissa del prompt."""
+    return ([{"role": "system", "content": SYSTEM_PROMPT + NOTIFY_RULES}] + FEW_SHOT_NOTIFY
+            + [{"role": "user", "content": "Sei sveglio?"}])
 
 
 # ---- Pulizia dell'output --------------------------------------------------

@@ -1,0 +1,4 @@
+# Dipendenze usate solo per creare l'installer (oltre a requirements.txt)
+pyinstaller>=6.0
+pefile>=2023.2.7
+pillow>=10.0

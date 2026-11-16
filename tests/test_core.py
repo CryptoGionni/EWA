@@ -223,7 +223,7 @@ def test_missing_api_key_readable_error():
     from ewa.core.llm import LLMError
 
     async def go():
-        llm = MarvLLM(dataclasses.replace(load_config(), fake_llm=False, llm_api_key=""))
+        llm = MarvLLM(dataclasses.replace(load_config(), llm_provider="openai", fake_llm=False, llm_api_key=""))
         with pytest.raises(LLMError, match="LLM_API_KEY"):
             await llm.complete([{"role": "user", "content": "x"}])
     run(go())

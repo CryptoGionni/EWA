@@ -19,7 +19,7 @@ import sys
 from typing import Any, Callable
 
 from PySide6.QtCore import QObject, QPoint, QRect, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QGuiApplication, QMouseEvent
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QGuiApplication, QIcon, QMouseEvent
 from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
                                QVBoxLayout, QWidget)
 
@@ -357,6 +357,19 @@ class HubBridge(QObject):
 # ---------------------------------------------------------------------------
 # Boilerplate di avvio
 # ---------------------------------------------------------------------------
+# nome tool (protocollo) -> file icona in ewa/assets/icons (estratte dal sistema in fase di build)
+ICON_KEYS = {"calc": "calculator", "clock": "clock", "camera": "camera", "notepad": "notepad"}
+
+
+def app_icon(tool: str) -> QIcon | None:
+    """Icona dell'app Windows omonima, se è stata estratta (packaging/extract_icons.py)."""
+    from pathlib import Path
+
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[2]))
+    path = base / "ewa" / "assets" / "icons" / f"{ICON_KEYS.get(tool, tool)}.ico"
+    return QIcon(str(path)) if path.is_file() else None
+
+
 def make_app(app_id: str) -> QApplication:
     """Crea la QApplication con impostazioni comuni (chiamare una volta)."""
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
@@ -369,6 +382,9 @@ def make_app(app_id: str) -> QApplication:
     app = QApplication.instance() or QApplication(sys.argv)
     app.setFont(ui_font(10.5))
     app.setApplicationName(app_id)
+    icon = app_icon(app_id)
+    if icon is not None:
+        app.setWindowIcon(icon)
     return app  # type: ignore[return-value]
 
 

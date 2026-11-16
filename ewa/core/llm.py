@@ -1,14 +1,17 @@
-"""MarvLLM: client OpenAI-compatibile (Groq, Ollama, ...) con modalità finta offline."""
+"""MarvLLM: Ollama locale (default) o endpoint compatibile OpenAI (Groq), con modalità finta offline."""
 from __future__ import annotations
 
 import asyncio
 import itertools
 import re
+import time
 from typing import AsyncIterator
 
 from .config import Config, load_config
+from .ollama_service import norm_keep_alive
 
 TIMEOUT_SECONDS = 20
+OLLAMA_TIMEOUT = 180  # il primo caricamento del modello su CPU può essere lento
 
 _THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL | re.IGNORECASE)
 _THINK_OPEN, _THINK_CLOSE = "<think>", "</think>"
@@ -92,6 +95,9 @@ FAKE_REPLIES = [
 
 
 class MarvLLM:
+    """Due backend: Ollama locale (default, API nativa per usare options/think/keep_alive)
+    oppure un endpoint compatibile OpenAI (Groq). Più la modalità finta offline."""
+
     def __init__(self, config: Config | None = None):
         self.cfg = config or load_config()
         self._client = None
@@ -105,15 +111,29 @@ class MarvLLM:
     def model(self) -> str:
         return "finto (MARV_FAKE_LLM)" if self.fake else self.cfg.llm_model
 
+    @property
+    def provider(self) -> str:
+        if self.fake:
+            return "(nessuno, modalità finta)"
+        if self.cfg.is_ollama:
+            return f"Ollama locale ({self.cfg.ollama_host})"
+        return self.cfg.llm_base_url.split("//")[-1].split("/")[0]
+
+    # ---- client ---------------------------------------------------------
     def _get_client(self):
         if self._client is None:
-            if not self.cfg.llm_api_key:
-                raise LLMError("Chiave API mancante: imposta LLM_API_KEY (o GROQ_API) nel file .env, "
-                               "oppure usa MARV_FAKE_LLM=1 per provare senza rete.")
-            from openai import AsyncOpenAI
+            if self.cfg.is_ollama:
+                import ollama
 
-            self._client = AsyncOpenAI(base_url=self.cfg.llm_base_url, api_key=self.cfg.llm_api_key,
-                                       timeout=TIMEOUT_SECONDS, max_retries=1)
+                self._client = ollama.AsyncClient(host=self.cfg.ollama_host, timeout=OLLAMA_TIMEOUT)
+            else:
+                if not self.cfg.llm_api_key:
+                    raise LLMError("Chiave API mancante: imposta LLM_API_KEY (o GROQ_API) nel file .env, "
+                                   "oppure usa LLM_PROVIDER=ollama per il modello locale.")
+                from openai import AsyncOpenAI
+
+                self._client = AsyncOpenAI(base_url=self.cfg.llm_base_url, api_key=self.cfg.llm_api_key,
+                                           timeout=TIMEOUT_SECONDS, max_retries=1)
         return self._client
 
     def _params(self, max_tokens: int | None) -> dict:
@@ -123,19 +143,43 @@ class MarvLLM:
             p["reasoning_effort"] = self.cfg.llm_reasoning_effort
         return p
 
+    def ollama_params(self, max_tokens: int | None = None) -> dict:
+        """Argomenti per ollama.chat (parametri di marv_ollama.py)."""
+        options = dict(self.cfg.ollama_options)
+        if max_tokens:
+            options["num_predict"] = max_tokens
+        return {"model": self.cfg.llm_model, "think": self.cfg.ollama_think, "options": options,
+                "keep_alive": norm_keep_alive(self.cfg.ollama_keep_alive)}
+
     def _fake_text(self) -> str:
         return FAKE_REPLIES[next(self._fake_i) % len(FAKE_REPLIES)]
 
+    # ---- chiamate -------------------------------------------------------
     async def complete(self, messages: list[dict], max_tokens: int | None = None) -> str:
         if self.fake:
             await asyncio.sleep(0.01)
             return self._fake_text()
         client = self._get_client()
         try:
+            if self.cfg.is_ollama:
+                resp = await client.chat(messages=messages, **self.ollama_params(max_tokens))
+                return strip_think(resp.message.content or "")
             resp = await client.chat.completions.create(messages=messages, **self._params(max_tokens))
         except Exception as e:
             raise LLMError(f"Chiamata al modello fallita: {e}") from e
         return strip_think(resp.choices[0].message.content or "")
+
+    async def _raw_stream(self, messages: list[dict], max_tokens: int | None) -> AsyncIterator[str]:
+        client = self._get_client()
+        if self.cfg.is_ollama:
+            async for chunk in await client.chat(messages=messages, stream=True, **self.ollama_params(max_tokens)):
+                # solo il contenuto finale: l'eventuale campo "thinking" viene ignorato
+                yield chunk.message.content or ""
+            return
+        stream = await client.chat.completions.create(messages=messages, stream=True, **self._params(max_tokens))
+        async for chunk in stream:
+            if chunk.choices:
+                yield chunk.choices[0].delta.content or ""
 
     async def stream(self, messages: list[dict], max_tokens: int | None = None) -> AsyncIterator[str]:
         if self.fake:
@@ -144,19 +188,33 @@ class MarvLLM:
                 await asyncio.sleep(0.005)
                 yield w + (" " if i < len(words) - 1 else "")
             return
-        client = self._get_client()
         flt = ThinkFilter()
         try:
-            stream = await client.chat.completions.create(messages=messages, stream=True,
-                                                          **self._params(max_tokens))
-            async for chunk in stream:
-                if not chunk.choices:
-                    continue
-                piece = flt.feed(chunk.choices[0].delta.content or "")
+            async for raw in self._raw_stream(messages, max_tokens):
+                piece = flt.feed(raw)
                 if piece:
                     yield piece
+        except LLMError:
+            raise
         except Exception as e:
             raise LLMError(f"Chiamata al modello fallita: {e}") from e
         tail = flt.flush()
         if tail:
             yield tail
+
+    async def warm_up(self, messages: list[dict]) -> float:
+        """Richiesta fittizia: carica il modello in memoria (e, con Ollama, mette in
+        cache il prompt di sistema di Marv). Restituisce i secondi impiegati."""
+        t0 = time.monotonic()
+        if not self.fake:
+            await self.complete(messages, max_tokens=1)
+        return time.monotonic() - t0
+
+    async def unload(self) -> None:
+        """Libera la memoria del modello (solo Ollama). Errori ignorati."""
+        if self.fake or not self.cfg.is_ollama or self._client is None:
+            return
+        try:
+            await self._client.chat(model=self.cfg.llm_model, messages=[], keep_alive=0)
+        except Exception:
+            pass
